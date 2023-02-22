@@ -15,6 +15,7 @@ namespace
         auto vertexShader = vsg::read_cast<vsg::ShaderStage>("shaders/standard.vert", options);
         auto fragmentShader = vsg::read_cast<vsg::ShaderStage>("shaders/standard_pbr.frag", options);
         vsg::ShaderStages stages{vertexShader, fragmentShader};
+        shaderSet->variants.clear();
         shaderSet->stages = stages;
         return shaderSet;
     }
