@@ -1,3 +1,5 @@
+#include "RenderDAG.h"
+
 #include <vsg/all.h>
 
 #ifdef vsgXchange_FOUND
@@ -20,6 +22,43 @@ namespace
         return shaderSet;
     }
 }
+
+vsg::ref_ptr<ResourceDesc> texResource = (new ResourceDesc)
+    ->creationDesc((new TextureDesc)
+                   ->format(VK_FORMAT_B8G8R8A8_UNORM)
+                   .loadOp(Clear)
+                   .clearColor(vsg::vec4(0.0, 0.0, 0.0, 1.0))
+                   .refptr())
+    .name("foo")
+    .refptr();
+
+std::vector<vsg::ref_ptr<NodeDesc>> nodes = {
+    (new NodeDesc)
+    ->outputs(
+        {(new ResourceDesc)
+         ->resType(Attachment)
+         .creationDesc((new TextureDesc)
+                       ->format(VK_FORMAT_R16G16B16A16_SFLOAT)
+                       .loadOp(Clear)
+                       .refptr())
+         .name("colorHDR")
+         .refptr(),
+         (new ResourceDesc)
+         ->resType(Attachment)
+         .creationDesc((new TextureDesc)
+                       ->format(VK_FORMAT_D32_SFLOAT)
+                       .loadOp(Clear)
+                       .refptr())
+         .name("depth")
+         .refptr()})
+    .name("HDR pass")
+    .refptr(),
+    (new NodeDesc)
+    ->inputs({(new ResourceDesc)
+            ->resType(Attachment)
+            .refptr()})
+    .refptr()
+};
 
 vsg::ref_ptr<vsg::Node> createTestScene(vsg::ref_ptr<vsg::Options> options)
 {
@@ -270,7 +309,7 @@ int main(int argc, char** argv)
 
     auto renderGraph = vsg::RenderGraph::create(window, view);
     // The classic VSG background, translated into sRGB values.
-    renderGraph->setClearValues({{0.02899f, 0.02899f, 0.13321f}});
+    renderGraph->setClearValues({{0.033105f, 0.033105f, 0.132868f}});
     auto commandGraph = vsg::CommandGraph::create(window, renderGraph);
     viewer->assignRecordAndSubmitTaskAndPresentation({commandGraph});
 

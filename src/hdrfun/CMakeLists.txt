@@ -1,5 +1,6 @@
 set(SOURCES
-    hdrfun.cpp
+  hdrfun.cpp
+  RenderDAG.cpp
 )
 
 add_executable(hdrfun ${SOURCES})
