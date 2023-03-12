@@ -1,16 +1,21 @@
 #include "RenderDAG.h"
 #include <vsg/io/Logger.h>
 #include <vsg/state/Sampler.h>
+#include <vsg/vk/RenderPass.h>
 
 #include <stack>
+
 
 // Notes:
 // When we need a previous frame's resouce, we will need to allocate multiple
 // resources and ping-pong.
 //
-// A resource that's updated by multiple passes (e.g., depth) needs multiple names in order to
-// correctly order the passes. That will need a new kind of resource that references an existing
-// resource. Could we just use "reference"?
+// A resource that's updated by multiple passes (e.g., depth) needs multiple
+// names in order to correctly order the passes. That will need a new kind of
+// resource that references an existing resource. Could we just use "reference"?
+//
+// XXX I'm not sure that's true. Mastering Graphics treats a depth format attachment as special and
+// always assigns it as the depth attchment...
 
 Resource& RenderDAG::addResource(const vsg::ref_ptr<ResourceDesc> &desc,
                             bool isOutput)
@@ -273,7 +278,31 @@ void RenderDAG::makeRenderPasses()
 {
     for (auto nodeHandle : sortedNodes)
     {
-        
+        auto& node = nodes[nodeHandle];
+        std::vector<ResourceHandle> attachments;
+        vsg::RenderPass::Attachments vsgAttachments;
+        for (auto outputResHandle : node.outputs)
+        {
+            auto& outputRes = resources[outputResHandle];
+            if (outputRes.resType == Attachment)
+            {
+                // Other kinds of outputs?
+                attachments.push_back(outputRes.outputHandle);
+                auto& attach = vsgAttachments.emplace_back();
+                // attach.format = outputRes.desc->creationDesc()->
+
+                
+            }
+        }
+        for (auto inputResHandle : node.inputs)
+        {
+            auto& inputRes = resources[inputResHandle];
+            if (inputRes.resType == Attachment)
+            {
+                attachments.push_back(inputRes.outputHandle);
+            }
+        }
+
     }
 }
 
