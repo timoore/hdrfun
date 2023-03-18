@@ -23,15 +23,6 @@ namespace
     }
 }
 
-vsg::ref_ptr<ResourceDesc> texResource = (new ResourceDesc)
-    ->creationDesc((new TextureDesc)
-                   ->format(VK_FORMAT_B8G8R8A8_UNORM)
-                   .loadOp(Clear)
-                   .clearColor(vsg::vec4(0.0, 0.0, 0.0, 1.0))
-                   .refptr())
-    .name("foo")
-    .refptr();
-
 std::vector<vsg::ref_ptr<NodeDesc>> nodes = {
     (new NodeDesc)
     ->outputs(
@@ -56,8 +47,56 @@ std::vector<vsg::ref_ptr<NodeDesc>> nodes = {
     (new NodeDesc)
     ->inputs({(new ResourceDesc)
             ->resType(Attachment)
+            .name("colorHDR")
             .refptr()})
-    .refptr()
+    .outputs({(new ResourceDesc)
+            ->resType(Attachment)
+            .name("toneMapped")
+            .creationDesc((new TextureDesc)
+                          ->format(VK_FORMAT_R8G8B8A8_UNORM)
+                          .loadOp(DontCare)
+                          .refptr()),
+            (new ResourceDesc)
+            ->resType(Attachment)
+            .name("bloom")
+            .creationDesc((new TextureDesc)
+                          ->format(VK_FORMAT_R8G8B8A8_UNORM)
+                          .loadOp(Clear)
+                          .refptr())})
+    .name("tone-mapping pass")
+    .refptr(),
+    (new NodeDesc)
+    ->inputs({(new ResourceDesc)
+            ->resType(Texture)
+            .name("bloom")
+            .refptr()})
+    .outputs({(new ResourceDesc)
+            ->resType(Attachment)
+            .name("bloom-blurX")
+            .creationDesc((new TextureDesc)
+                          ->format(VK_FORMAT_R8G8B8A8_UNORM)
+                          .loadOp(DontCare)
+                          .refptr())
+            .refptr()})
+    .name("Bloom blur X")
+    .refptr(),
+    (new NodeDesc)
+    ->inputs({(new ResourceDesc)
+            ->resType(Attachment)
+            .name("toneMapped")
+            .refptr(),
+            (new ResourceDesc)
+            ->resType(Texture)
+            .name("bloom-blurX")
+            .refptr()})
+    .outputs({(new ResourceDesc)
+                ->resType(Attachment)
+                .name("bloom-blurY / compose")
+                .creationDesc((new TextureDesc)
+                              ->format(VK_FORMAT_R8G8B8A8_UNORM)
+                              .loadOp(DontCare)
+                              .refptr())})
+    
 };
 
 vsg::ref_ptr<vsg::Node> createTestScene(vsg::ref_ptr<vsg::Options> options)

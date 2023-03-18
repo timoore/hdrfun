@@ -8,13 +8,15 @@
 
 #include <limits>
 
+/*
+ * @brief Types of the inputs and outputs of a node
+ */
 enum FrameGraphResourceType
 {
   Invalid = -1,
   Buffer = 0,
   Texture = 1,
-  Attachment = 2,
-  Reference = 3
+  Attachment = 2
 };
 
 // An operation, which can be either load or store
@@ -33,7 +35,8 @@ uint32_t backIndex(const T& vector)
     return static_cast<uint32_t>(&vector.back() - vector.data());
 }
 
-// The Desc classes are holders of data about render passes and resources. They
+// The Desc classes are holders of data about render passes and resources. The funky member
+// definitions all a poor man's C / C++ 2020 named member / fluent style.
 // are relatively easy to initalize by hand.
 
 // Macro arguments can't contain literal commas!
@@ -68,6 +71,11 @@ public:
     vsg::ref_ptr<TextureDesc> refptr() { return vsg::ref_ptr(this); }
 };
 
+// The name of a resource is actually the unique name of the resource as an edge
+// between two nodes. In order for to share read-modify-write resource among
+// several nodes, a "loadFrom" member specifies the source object of such an
+// output resource.
+
 class ResourceDesc : public vsg::Inherit<vsg::Object, ResourceDesc>
 {
     public:
@@ -76,16 +84,21 @@ class ResourceDesc : public vsg::Inherit<vsg::Object, ResourceDesc>
 
     vsg::observer_ptr<FrameGraphNode> producer;
     int refCount;               // needed?
-    std::string name_;
-    std::string& name() { return name_; }
-    ResourceDesc& name(const std::string& n) { name_ = n; return *this; }
+    MEMBER(std::string, name, "");
+    MEMBER(std::string, loadFrom, "");
     vsg::ref_ptr<TextureDesc> refptr() { return vsg::ref_ptr(this); }
 };
 
 // Our graph node will contain a RenderGraph, which encapsulates a frame buffer,
 // its render pass, and a view which contains the scene graph to render.
 //
-// Why not call it a PassDesc? It could be something other than a RenderPass e.g., compute.
+// Why not call it a PassDesc? It could be something other than a RenderPass
+// e.g., compute.
+//
+// inputs holds the read-only inputs to a node. Input resources of type
+// Attachment will be renderpass input attachments.
+//
+// outputs holds read-modify-write and write-only resources.
 
 class NodeDesc : public vsg::Inherit<vsg::Object, NodeDesc>
 {
@@ -108,7 +121,7 @@ public:
     vsg::ref_ptr<NodeDesc> refptr() { return vsg::ref_ptr(this); }
 };
 
-// These classes are the nodes and edges of the DAG. The contain the
+// These classes are the nodes and edges of the DAG. They contain the
 // description, bookkeeping for sorting the graph, and eventually VSG objects
 // that will instantiate the CommandGraph.
 //
@@ -122,7 +135,8 @@ const uint32_t invalidHandle = std::numeric_limits<uint32_t>::max();
 struct Resource
 {
     explicit Resource(const vsg::ref_ptr<ResourceDesc>& resDesc)
-        : desc(resDesc), producer(invalidHandle)
+        : desc(resDesc), producer(invalidHandle), outputHandle(invalidHandle),
+          loadFromHandle(invalidHandle)
     {
         resType = desc->resType();
     }
@@ -132,6 +146,8 @@ struct Resource
     vsg::ref_ptr<ResourceDesc> desc;
     NodeHandle producer;        // Node that produces this resource as output
     ResourceHandle outputHandle; // Source output resource
+    ResourceHandle loadFromHandle;
+
 };
 
 struct Node

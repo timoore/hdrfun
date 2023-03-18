@@ -9,33 +9,28 @@
 // Notes:
 // When we need a previous frame's resouce, we will need to allocate multiple
 // resources and ping-pong.
-//
-// A resource that's updated by multiple passes (e.g., depth) needs multiple
-// names in order to correctly order the passes. That will need a new kind of
-// resource that references an existing resource. Could we just use "reference"?
-//
-// XXX I'm not sure that's true. Mastering Graphics treats a depth format attachment as special and
-// always assigns it as the depth attchment...
 
 Resource& RenderDAG::addResource(const vsg::ref_ptr<ResourceDesc> &desc,
                             bool isOutput)
 {
-    Resource& resRef = resources.emplace_back(desc);
+    auto itr = resourceMap.find(desc->name());
+    if (itr == resourceMap.end())
+    {
+        resources.emplace_back(desc);
+        auto insertResult = resourceMap.insert({desc->name(), backIndex(resources)});
+        itr = insertResult.first;
+    }
     if (isOutput)
     {
-        auto insertResult = resourceMap.insert({desc->name(), backIndex(resources)});
-        if (!insertResult.second)
-        {
-            vsg::fatal("resource ", desc->name(), " has multiple output definitions");
-        }
+        if ()
         resRef.outputHandle = backIndex(resources);
     }
     return resRef;
 }
 
-RenderDAG::RenderDAG(std::vector<vsg::ref_ptr<NodeDesc>> &nodes)
+RenderDAG::RenderDAG(std::vector<vsg::ref_ptr<NodeDesc>> &nodesDescs)
 {
-    for (const auto& nodeDesc : nodes)
+    for (const auto& nodeDesc : nodesDescs)
     {
         auto& nodeRef = nodes.emplace_back(nodeDesc);
         auto nodeHandle = &nodeRef - nodes.data();
@@ -51,9 +46,22 @@ RenderDAG::RenderDAG(std::vector<vsg::ref_ptr<NodeDesc>> &nodes)
         for (const auto& resDesc : nodeDesc->outputs())
         {
             auto& resource = addResource(resDesc, true);
-            if (resource.resType != Reference)
+            resource.producer = nodeHandle;
+        }
+    }
+    for (const auto& node : nodes)
+    {
+        for (auto resHandle : node.outputs)
+        {
+            auto& res = resources[resHandle];
+            if (!res.desc->loadFrom().empty())
             {
-                resource.producer = nodeHandle;
+                auto itr = resourceMap.find(res.desc->loadFrom());
+                if (itr == resourceMap.end())
+                {
+                    vsg::fatal("No resource named ", res.desc->loadFrom());
+                }
+                res.loadFromHandle = itr->second;
             }
         }
     }
@@ -68,13 +76,12 @@ void RenderDAG::computeEdges()
         for (auto input : node.inputs)
         {
             auto& inputRes = resources[input];
-            auto outputItr = resourceMap.find(inputRes.desc->name());
-            if (outputItr == resourceMap.end() && !inputRes.desc->creationDesc()->external() )
+            if (inputRes.outputHandle == invalidHandle&& !inputRes.desc->creationDesc()->external())
             {
                 vsg::fatal("Resource ", inputRes.desc->name(), "in node ",
                            node.desc->name(), "has no producer");
             }
-            auto& outputRes = resources[outputItr->second];
+            auto& outputRes = resources[inputRes.outputHandle];
             inputRes.producer = outputRes.producer;
             inputRes.outputHandle = outputRes.outputHandle;
             edges.emplace(inputRes.producer, i);
