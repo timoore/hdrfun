@@ -27,6 +27,18 @@ enum RenderPassOperation
     Clear
 };
 
+struct ImageDimensions
+{
+    enum Type
+    {
+        Absolute,
+        FBScaled
+    };
+    Type dimType = FBScaled;
+    float width = 1.0f;
+    float height = 1.0f;
+};
+
 class FrameGraphNode;
 
 template <typename T>
@@ -124,42 +136,58 @@ public:
 // These classes are the nodes and edges of the DAG. They contain the
 // description, bookkeeping for sorting the graph, and eventually VSG objects
 // that will instantiate the CommandGraph.
-//
-// These are stored in std:vector objects. References to them are by index.
 
-typedef uint32_t NodeHandle;
-typedef uint32_t ResourceHandle;
+class Node;
 
-const uint32_t invalidHandle = std::numeric_limits<uint32_t>::max();
-
-struct Resource
+class Resource : public vsg::Inherit<vsg::Object, Resource>
 {
-    explicit Resource(const vsg::ref_ptr<ResourceDesc>& resDesc)
-        : desc(resDesc), producer(invalidHandle), outputHandle(invalidHandle),
-          loadFromHandle(invalidHandle)
-    {
-        resType = desc->resType();
-    }
     
     // This is the input type. Redundant with type in desc?
-    FrameGraphResourceType resType;
-    vsg::ref_ptr<ResourceDesc> desc;
-    NodeHandle producer;        // Node that produces this resource as output
-    ResourceHandle outputHandle; // Source output resource
-    ResourceHandle loadFromHandle;
-
+    vsg::ref_ptr<Node> producer;        // Node that produces this resource (use) as output
 };
 
-struct Node
+// An ImageResource can be either an Attachment or Texture input. It can only be
+// Attachment output until we get storage textures, buffers, etc.
+//
+// For input / specification, it makes sense to specify the creation of an image within a
+// resource. Does it for implementation? One good reason: having to recreate the image during a resize.
+class ImageResource : public vsg::Inherit<Resource, ImageResource>
 {
+public:
+    vsg::ref_ptr<vsg::Image> source;
+    vsg::ref_ptr<vsg::ImageView> use;
+    ImageDimensions dimensions;
+};
+
+struct ResourceUse
+{
+  
+};
+
+struct InputUse
+    {};
+
+struct OutputUse
+{
+};
+
+class Node
+{
+public:
     explicit Node(const vsg::ref_ptr<NodeDesc>& nodeDesc)
         : desc(nodeDesc)
     {
     }
     vsg::ref_ptr<NodeDesc> desc;
+    float resolution_scale_width  = 0.f;
+    float resolution_scale_height = 0.f;
+    bool compute = false;
+    bool ray_tracing = false;
+    bool enabled = true;
+
     // vsg::RenderGraph
-    std::vector<ResourceHandle> inputs;
-    std::vector<ResourceHandle> outputs;
+    std::vector<InputUse> inputs;
+    std::vector<OutputUse> outputs;
 };
 
 // The RenderDAG creates a graph, and then a sorted order, from the input list of nodes and resources
