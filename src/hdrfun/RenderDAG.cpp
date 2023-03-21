@@ -4,12 +4,33 @@
 #include <vsg/vk/RenderPass.h>
 
 #include <stack>
+#include <stdexcept>
 
+const std::string &name(const vsg::ref_ptr<vsg::Object> &object)
+{
+    vsg::Object* obj = object->getObject("name");
+    if (!obj)
+    {
+        throw std::logic_error("object must have a name");
+    }
+    vsg::Value<std::string>* value = dynamic_cast<vsg::Value<std::string>*>(obj);
+    if (!value)
+    {
+        throw std::logic_error("object must have a name");
+    }
+    return value->value();
+}
+
+void setName(const vsg::ref_ptr<vsg::Object> &object, const std::string &name)
+{
+    object->setValue("name", name);
+}
 
 // Notes:
 // When we need a previous frame's resouce, we will need to allocate multiple
 // resources and ping-pong.
 
+#if 0
 Resource& RenderDAG::addResource(const vsg::ref_ptr<ResourceDesc> &desc,
                             bool isOutput)
 {
@@ -27,7 +48,15 @@ Resource& RenderDAG::addResource(const vsg::ref_ptr<ResourceDesc> &desc,
     }
     return resRef;
 }
+#endif
 
+bool RenderDAG::addResource(const vsg::ref_ptr<Resource>& resource, const std::string& in_name)
+{
+    const std::string& realName = (in_name == "") ? name(resource) : in_name;
+    auto itr = resourceMap.insert({realName, resource});
+    return itr.second;
+}
+        
 RenderDAG::RenderDAG(std::vector<vsg::ref_ptr<NodeDesc>> &nodesDescs)
 {
     for (const auto& nodeDesc : nodesDescs)
@@ -311,6 +340,22 @@ void RenderDAG::makeRenderPasses()
         }
 
     }
+}
+
+// Many fields can (should) be deferred until the render graph is compiled.
+vsg::ref_ptr<vsg::Image> RenderDAG::makeImage(VkFormat format, VkSampleCountFlags sampleCount)
+{
+    auto image = vsg::Image::create();
+    image->imageType = VK_IMAGE_TYPE_2D;
+    image->format = format;
+    image->mipLevels = 1;
+    image->arrayLayers = 1;
+    image->samples = sampleCount;
+    image->tiling = VK_IMAGE_TILING_OPTIMAL;
+//    image->usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+    image->initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    image->flags = 0;
+    image->sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 }
 
 void RenderDAG::build(vsg::Device* device)

@@ -19,6 +19,15 @@ enum FrameGraphResourceType
   Attachment = 2
 };
 
+enum AttachmentType
+{
+    Output = 0,
+    Input,
+    Depth,
+    MultisampleResolve,
+    Presentation                // Denotes the eventual destination of rendering
+};
+
 // An operation, which can be either load or store
 enum RenderPassOperation
 {
@@ -57,13 +66,7 @@ uint32_t backIndex(const T& vector)
     auto NAME(const TYPE& val) { NAME ## _ = val; return *this; } \
     TYPE NAME ## _ = INIT;
 
-class CreationDesc : public vsg::Inherit<vsg::Object, CreationDesc>
-{
-public:
-    MEMBER(bool, external, false);
-    MEMBER(bool, compute, false)
-};
-
+#if 0
 class TextureDesc : public vsg::Inherit<CreationDesc, TextureDesc>
 {
 public:
@@ -93,7 +96,6 @@ class ResourceDesc : public vsg::Inherit<vsg::Object, ResourceDesc>
     public:
     MEMBER(vsg::ref_ptr<CreationDesc>, creationDesc, {});
     MEMBER(FrameGraphResourceType, resType, Invalid);
-
     vsg::observer_ptr<FrameGraphNode> producer;
     int refCount;               // needed?
     MEMBER(std::string, name, "");
@@ -132,6 +134,7 @@ public:
     NodeDesc& name(std::string n) { name_ = n; return *this; }
     vsg::ref_ptr<NodeDesc> refptr() { return vsg::ref_ptr(this); }
 };
+#endif
 
 // These classes are the nodes and edges of the DAG. They contain the
 // description, bookkeeping for sorting the graph, and eventually VSG objects
@@ -139,11 +142,16 @@ public:
 
 class Node;
 
+const std::string& name(const vsg::ref_ptr<vsg::Object> &object);
+void setName(const vsg::ref_ptr<vsg::Object> &object, const std::string &name);
+
 class Resource : public vsg::Inherit<vsg::Object, Resource>
 {
-    
-    // This is the input type. Redundant with type in desc?
-    vsg::ref_ptr<Node> producer;        // Node that produces this resource (use) as output
+    // Node that has most recently used this resource as output
+    vsg::observer_ptr<Node> producer;
+    // For read/modify/write resources, the output resource that provided the initial input. There will be an
+    // edge between that resource's producer and the node that contains this resource as an output.
+    vsg::observer_ptr<Resource> ancestor;
 };
 
 // An ImageResource can be either an Attachment or Texture input. It can only be
@@ -154,69 +162,91 @@ class Resource : public vsg::Inherit<vsg::Object, Resource>
 class ImageResource : public vsg::Inherit<Resource, ImageResource>
 {
 public:
+    ImageResource()
+    {
+    }
+    ImageResource(const vsg::ref_ptr<vsg::Image>& in_source,
+                  const vsg::ref_ptr<vsg::ImageView>& in_use)
+        : source(in_source), use(in_use)
+    {
+    }
     vsg::ref_ptr<vsg::Image> source;
     vsg::ref_ptr<vsg::ImageView> use;
     ImageDimensions dimensions;
 };
 
-struct ResourceUse
+struct ResourceUse : public vsg::Inherit<vsg::Object, ResourceUse>
+                         
 {
-  
-};
-
-struct InputUse
-    {};
-
-struct OutputUse
-{
-};
-
-class Node
-{
-public:
-    explicit Node(const vsg::ref_ptr<NodeDesc>& nodeDesc)
-        : desc(nodeDesc)
+    ResourceUse()
+    {}
+    ResourceUse(const vsg::ref_ptr<Resource>& in_resource)
+        : resource(in_resource)
     {
     }
-    vsg::ref_ptr<NodeDesc> desc;
+
+    vsg::ref_ptr<Resource> resource;
+};
+
+struct AttachmentUse : public vsg::Inherit<ResourceUse, AttachmentUse>
+{
+    AttachmentUse()
+        : attachmentType(Output)
+    {}
+    AttachmentUse(const vsg::ref_ptr<Resource>& in_resource,
+                  AttachmentType in_attachmentType = Output)
+        : Inherit(in_resource), attachmentType(in_attachmentType)
+    {
+    }
+    AttachmentType attachmentType;
+};
+
+
+class Node : public vsg::Inherit<vsg::Object, Node>
+{
+public:
+    
+    // Are scaled dimensions needed here?
     float resolution_scale_width  = 0.f;
     float resolution_scale_height = 0.f;
-    bool compute = false;
-    bool ray_tracing = false;
     bool enabled = true;
 
     // vsg::RenderGraph
-    std::vector<InputUse> inputs;
-    std::vector<OutputUse> outputs;
+    std::vector<vsg::ref_ptr<ResourceUse>> inputs;
+    std::vector<vsg::ref_ptr<ResourceUse>> outputs;
+};
+
+class RenderNode : public vsg::Inherit<Node, RenderNode>
+{
+public:
 };
 
 // The RenderDAG creates a graph, and then a sorted order, from the input list of nodes and resources
 
-class RenderDAG
+class RenderDAG : public vsg::Inherit<vsg::Object, RenderDAG>
 {
 public:
-    RenderDAG(std::vector<vsg::ref_ptr<NodeDesc>>& nodes);
+    RenderDAG();
     // Dimensions that are the basis for the scaling parameters of resources. Need to handle
     // updating all those after a resize
     VkExtent2D dimensions;
-    Resource& addResource(const vsg::ref_ptr<ResourceDesc>& desc, bool isOutput);
     void computeEdges();
     void build(vsg::Device* device);
     vsg::CommandGraph getCommandGraph();
     vsg::RenderGraph getRenderGraph(const std::string& name);
+    bool addResource(const vsg::ref_ptr<Resource>& resource, const std::string& name = "");
+    bool addNode(const vsg::ref_ptr<Node>& node, const std::string& name = "");
+    static const VkSampleCountFlags UseGraphSampleCount = VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM;
+    static vsg::ref_ptr<vsg::Image> makeImage(VkFormat format,
+                                              VkSampleCountFlags sampleCount = UseGraphSampleCount);
 protected:
     vsg::ref_ptr<vsg::CommandGraph> _commandGraph;
-    // Vector of all references to resources in inputs and outputs
-    std::vector<Resource> resources;
-    // map from resource name to resource reference that creates it i.e., the output that creates it.
-    std::unordered_map<std::string, ResourceHandle> resourceMap;
-    std::vector<Node> nodes;
+    // map from resource name to resource
+    std::unordered_map<std::string, vsg::ref_ptr<Resource>> resourceMap;
 
-    std::unordered_map<std::string, NodeHandle> nodeMap;
-    std::unordered_multimap<NodeHandle, NodeHandle> edges;
+    std::unordered_map<std::string, vsg::ref_ptr<Node>> nodeMap;
+    std::unordered_multimap<vsg::ref_ptr<Node>, vsg::ref_ptr<Node>> edges;
     void allocateTextures(vsg::Device* device);
-    void setInputUsage(ResourceHandle resHandle);
-    void setOutputUsage(ResourceHandle resHandle);
-    std::vector<NodeHandle> sortedNodes;
+    std::vector<vsg::ref_ptr<Node>> sortedNodes;
     void makeRenderPasses();
 };

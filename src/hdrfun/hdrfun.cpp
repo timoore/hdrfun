@@ -22,7 +22,7 @@ namespace
         return shaderSet;
     }
 }
-
+#if 0
 std::vector<vsg::ref_ptr<NodeDesc>> nodes = {
     (new NodeDesc)
     ->outputs(
@@ -98,7 +98,33 @@ std::vector<vsg::ref_ptr<NodeDesc>> nodes = {
                               .refptr())})
     
 };
+#endif
 
+vsg::ref_ptr<RenderDAG>
+makeHDRDag()
+{
+    auto dag = RenderDAG::create();
+    auto HDRPassNode = RenderNode::create();
+    setName(HDRPassNode, "HDRPass");
+    auto HDRImage = RenderDAG::makeImage(VK_FORMAT_R16G16B16A16_UNORM);
+    auto HDRIv = vsg::ImageView::create(HDRImage, VK_IMAGE_ASPECT_COLOR_BIT); // XXX delay aspect?
+    auto HDRColor = ImageResource::create(HDRImage, HDRIv);
+    setName(HDRColor, "HDRColor");
+    dag->addResource(HDRColor);
+    auto depthImage = RenderDAG::makeImage(VK_FORMAT_D32_SFLOAT);
+    auto depthIv = vsg::ImageView::create(depthImage, VK_IMAGE_ASPECT_DEPTH_BIT);
+    auto depth = ImageResource::create(depthImage, depthIv);
+    setName(depth, "depth");
+    dag->addResource(depth);
+    HDRPassNode->outputs.emplace_back(AttachmentUse::create(HDRColor, Output));
+    HDRPassNode->outputs.emplace_back(AttachmentUse::create(depth, Depth));
+    dag->addNode(HDRPassNode);
+    auto HDRResolveNode = RenderNode::create();
+    HDRResolveNode->inputs.emplace_back(AttachmentUse::create(HDRColor, Input));
+    HDRResolveNode->outputs.emplace_back(AttachmentUse::create(nullptr, Presentation));
+    
+}
+    
 vsg::ref_ptr<vsg::Node> createTestScene(vsg::ref_ptr<vsg::Options> options)
 {
     auto builder = vsg::Builder::create();
