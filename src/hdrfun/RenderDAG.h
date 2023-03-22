@@ -147,6 +147,7 @@ void setName(const vsg::ref_ptr<vsg::Object> &object, const std::string &name);
 
 class Resource : public vsg::Inherit<vsg::Object, Resource>
 {
+public:
     // Node that has most recently used this resource as output
     vsg::observer_ptr<Node> producer;
     // For read/modify/write resources, the output resource that provided the initial input. There will be an
@@ -195,10 +196,13 @@ struct AttachmentUse : public vsg::Inherit<ResourceUse, AttachmentUse>
     {}
     AttachmentUse(const vsg::ref_ptr<Resource>& in_resource,
                   AttachmentType in_attachmentType = Output)
-        : Inherit(in_resource), attachmentType(in_attachmentType)
+        : Inherit(in_resource), attachmentType(in_attachmentType),
+          loadOp(VK_ATTACHMENT_LOAD_OP_DONT_CARE), storeOp(VK_ATTACHMENT_STORE_OP_DONT_CARE)
     {
     }
     AttachmentType attachmentType;
+    VkAttachmentLoadOp loadOp;
+    VkAttachmentStoreOp storeOp;
 };
 
 
@@ -210,7 +214,10 @@ public:
     float resolution_scale_width  = 0.f;
     float resolution_scale_height = 0.f;
     bool enabled = true;
-
+    vsg::ref_ptr<ResourceUse> addInput(const vsg::ref_ptr<ResourceUse>& input);
+    vsg::ref_ptr<ResourceUse> addWriteOnlyOutput(const vsg::ref_ptr<ResourceUse>& output);
+    vsg::ref_ptr<ResourceUse> addReadWriteOutput(const vsg::ref_ptr<ResourceUse>& input,
+                                                 const std::string& outputName);
     // vsg::RenderGraph
     std::vector<vsg::ref_ptr<ResourceUse>> inputs;
     std::vector<vsg::ref_ptr<ResourceUse>> outputs;

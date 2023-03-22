@@ -116,11 +116,11 @@ makeHDRDag()
     auto depth = ImageResource::create(depthImage, depthIv);
     setName(depth, "depth");
     dag->addResource(depth);
-    HDRPassNode->outputs.emplace_back(AttachmentUse::create(HDRColor, Output));
-    HDRPassNode->outputs.emplace_back(AttachmentUse::create(depth, Depth));
+    HDRPassNode->addWriteOnlyOutput(AttachmentUse::create(HDRColor, Output));
+    HDRPassNode->addWriteOnlyOutput(AttachmentUse::create(depth, Depth));
     dag->addNode(HDRPassNode);
     auto HDRResolveNode = RenderNode::create();
-    HDRResolveNode->inputs.emplace_back(AttachmentUse::create(HDRColor, Input));
+    HDRResolveNode->addInput(AttachmentUse::create(HDRColor, Input));
     HDRResolveNode->outputs.emplace_back(AttachmentUse::create(nullptr, Presentation));
     
 }

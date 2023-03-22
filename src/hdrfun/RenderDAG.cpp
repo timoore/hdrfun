@@ -26,6 +26,27 @@ void setName(const vsg::ref_ptr<vsg::Object> &object, const std::string &name)
     object->setValue("name", name);
 }
 
+vsg::ref_ptr<ResourceUse> Node::addInput(const vsg::ref_ptr<ResourceUse>& input)
+{
+    return inputs.emplace_back(input);
+}
+
+vsg::ref_ptr<ResourceUse> Node::addWriteOnlyOutput(const vsg::ref_ptr<ResourceUse>& output)
+{
+    output->resource->producer = vsg::ref_ptr(this);
+    return outputs.emplace_back(output);
+}
+
+vsg::ref_ptr<ResourceUse> Node::addReadWriteOutput(const vsg::ref_ptr<Resource>& input,
+                                                 const std::string& outputName)
+{
+    auto inputCopy = Resource::create(input);
+    setName(inputCopy, outputName);
+    inputCopy->ancestor = input;
+    inputCopy->producer = vsg::ref_ptr(this);
+    return outputs.emplace_back(inputCopy);
+}
+
 // Notes:
 // When we need a previous frame's resouce, we will need to allocate multiple
 // resources and ping-pong.
@@ -57,7 +78,7 @@ bool RenderDAG::addResource(const vsg::ref_ptr<Resource>& resource, const std::s
     return itr.second;
 }
         
-RenderDAG::RenderDAG(std::vector<vsg::ref_ptr<NodeDesc>> &nodesDescs)
+RenderDAG::RenderDAG()
 {
     for (const auto& nodeDesc : nodesDescs)
     {
