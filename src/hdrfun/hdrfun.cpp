@@ -116,13 +116,13 @@ makeHDRDag()
     auto depth = ImageResource::create(depthImage, depthIv);
     setName(depth, "depth");
     dag->addResource(depth);
-    HDRPassNode->addWriteOnlyOutput(AttachmentUse::create(HDRColor, Output));
-    HDRPassNode->addWriteOnlyOutput(AttachmentUse::create(depth, Depth));
+    HDRPassNode->addOutput(AttachmentUse::create(HDRColor, Color));
+    HDRPassNode->addOutput(AttachmentUse::create(depth, Depth));
     dag->addNode(HDRPassNode);
     auto HDRResolveNode = RenderNode::create();
     HDRResolveNode->addInput(AttachmentUse::create(HDRColor, Input));
-    HDRResolveNode->outputs.emplace_back(AttachmentUse::create(nullptr, Presentation));
-    
+    HDRResolveNode->outputs.emplace_back(AttachmentUse::create(PresentationResource::create()));
+    return dag;
 }
     
 vsg::ref_ptr<vsg::Node> createTestScene(vsg::ref_ptr<vsg::Options> options)

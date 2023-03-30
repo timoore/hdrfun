@@ -31,45 +31,44 @@ vsg::ref_ptr<ResourceUse> Node::addInput(const vsg::ref_ptr<ResourceUse>& input)
     return inputs.emplace_back(input);
 }
 
-vsg::ref_ptr<ResourceUse> Node::addWriteOnlyOutput(const vsg::ref_ptr<ResourceUse>& output)
+vsg::ref_ptr<ResourceUse> Node::addOutput(const vsg::ref_ptr<ResourceUse>& output)
 {
     output->resource->producer = vsg::ref_ptr(this);
     return outputs.emplace_back(output);
 }
 
-vsg::ref_ptr<ResourceUse> Node::addReadWriteOutput(const vsg::ref_ptr<Resource>& input,
-                                                 const std::string& outputName)
+void Node::prepareResources()
 {
-    auto inputCopy = Resource::create(input);
-    setName(inputCopy, outputName);
-    inputCopy->ancestor = input;
-    inputCopy->producer = vsg::ref_ptr(this);
-    return outputs.emplace_back(inputCopy);
 }
 
+vsg::ref_ptr<ResourceUse> Node::findResource(const vsg::ref_ptr<Resource> &resource)
+{
+    auto pred = [&resource](const auto& resUse)
+    {
+        return resUse->resource == resource;
+    };
+    auto inputItr = std::find_if(inputs.begin(), inputs.end(), pred);
+    if (inputItr != inputs.end())
+    {
+        return *inputItr;
+    }
+    auto outputItr = std::find_if(outputs.begin(), outputs.end(), pred);
+    if (outputItr != outputs.end())
+    {
+        return *outputItr;
+    }
+    return {};
+}
+
+VkImageLayout Node::compareSetFinalLayout(const vsg::ref_ptr<Resource>&, VkImageLayout)
+{
+    return VK_IMAGE_LAYOUT_UNDEFINED;
+}
+    
 // Notes:
 // When we need a previous frame's resouce, we will need to allocate multiple
 // resources and ping-pong.
 
-#if 0
-Resource& RenderDAG::addResource(const vsg::ref_ptr<ResourceDesc> &desc,
-                            bool isOutput)
-{
-    auto itr = resourceMap.find(desc->name());
-    if (itr == resourceMap.end())
-    {
-        resources.emplace_back(desc);
-        auto insertResult = resourceMap.insert({desc->name(), backIndex(resources)});
-        itr = insertResult.first;
-    }
-    if (isOutput)
-    {
-        if ()
-        resRef.outputHandle = backIndex(resources);
-    }
-    return resRef;
-}
-#endif
 
 bool RenderDAG::addResource(const vsg::ref_ptr<Resource>& resource, const std::string& in_name)
 {
@@ -80,61 +79,24 @@ bool RenderDAG::addResource(const vsg::ref_ptr<Resource>& resource, const std::s
         
 RenderDAG::RenderDAG()
 {
-    for (const auto& nodeDesc : nodesDescs)
-    {
-        auto& nodeRef = nodes.emplace_back(nodeDesc);
-        auto nodeHandle = &nodeRef - nodes.data();
-        auto insrt = nodeMap.insert({nodeDesc->name(), nodeHandle});
-        if (!insrt.second)
-        {
-            vsg::fatal("multiple nodes named ", nodeDesc->name());
-        }
-        for (const auto& resDesc : nodeDesc->inputs())
-        {
-            addResource(resDesc, false);
-        }
-        for (const auto& resDesc : nodeDesc->outputs())
-        {
-            auto& resource = addResource(resDesc, true);
-            resource.producer = nodeHandle;
-        }
-    }
-    for (const auto& node : nodes)
-    {
-        for (auto resHandle : node.outputs)
-        {
-            auto& res = resources[resHandle];
-            if (!res.desc->loadFrom().empty())
-            {
-                auto itr = resourceMap.find(res.desc->loadFrom());
-                if (itr == resourceMap.end())
-                {
-                    vsg::fatal("No resource named ", res.desc->loadFrom());
-                }
-                res.loadFromHandle = itr->second;
-            }
-        }
-    }
 }
 
 void RenderDAG::computeEdges()
 {
     edges.clear();
-    for (size_t i = 0; i < nodes.size(); ++i)
+    for (auto entry : nodeMap)
     {
-        auto& node = nodes[i];
-        for (auto input : node.inputs)
+        const auto& node = entry.second;
+        for (const auto& inputUse : node->inputs)
         {
-            auto& inputRes = resources[input];
-            if (inputRes.outputHandle == invalidHandle&& !inputRes.desc->creationDesc()->external())
+            edges.emplace(inputUse->resource->producer, node);
+        }
+        for (const auto& outputUse : node->outputs)
+        {
+            if (auto ancestor = outputUse->resource->ancestor; ancestor)
             {
-                vsg::fatal("Resource ", inputRes.desc->name(), "in node ",
-                           node.desc->name(), "has no producer");
+                edges.emplace(ancestor, node);
             }
-            auto& outputRes = resources[inputRes.outputHandle];
-            inputRes.producer = outputRes.producer;
-            inputRes.outputHandle = outputRes.outputHandle;
-            edges.emplace(inputRes.producer, i);
         }
     }
 }
@@ -143,17 +105,19 @@ void RenderDAG::computeEdges()
 
 namespace
 {
-    void dfs(const std::unordered_multimap<NodeHandle, NodeHandle>& graph,
-             std::vector<int>& color,
-             NodeHandle node,
-             const std::function<void(NodeHandle)> post_order_func)
+    using Item = vsg::ref_ptr<Node>;
+    
+    void dfs(const RenderDAG::Graph& graph,
+             std::unordered_map<Item, int>  color,
+             const Item& node,
+             const std::function<void(const Item&)> post_order_func)
     {
-        std::stack<int> nodes;
+        std::stack<Item> nodes;
         nodes.push(node);
  
         while (!nodes.empty())
         {
-            int from = nodes.top();
+            const Item from = nodes.top();
  
             if (color[from] == 1)
             {
@@ -186,122 +150,237 @@ namespace
         }
     }
  
-    void topological_sort(int n, const std::unordered_multimap<NodeHandle, NodeHandle>& graph,
-                          std::vector<NodeHandle>& result)
+    void topological_sort(const std::vector<vsg::ref_ptr<Node>>& input, const RenderDAG::Graph& graph,
+                          std::vector<vsg::ref_ptr<Node>>& result)
     {
+        auto n = input.size();
         result.resize(n);
-        std::vector<int> color(n, 0);
+        std::unordered_map<vsg::ref_ptr<Node>, int> color;
+        for (auto& node : input)
+        {
+            color[node] = 0;
+        }
         int j = 0;
-        auto post_order_func = [&result, &j](int node) {
+        auto post_order_func = [&result, &j](const vsg::ref_ptr<Node>& node) {
             result[j++] = node;
         };
- 
-        for (int i = 0; i < n; ++i)
+
+        for (const auto& node : input)
         {
-            if (color[i] == 0)
+            if (color[node] == 0)
             {
-                dfs(graph, color, i, post_order_func);
+                dfs(graph, color, node, post_order_func);
             }
         }
- 
         reverse(begin(result), end(result));
     }
 }
 
-void RenderDAG::setInputUsage(ResourceHandle resHandle) 
-{
-    auto& inputRes = resources[resHandle];
-    if (inputRes.resType == Texture || inputRes.resType == Attachment)
-    {
-        auto& outputRes = resources[inputRes.producer];
-        vsg::ref_ptr<TextureDesc> texDesc = outputRes.desc->creationDesc().cast<TextureDesc>();
-        if (texDesc)
-        {
-            texDesc->usage() |= (inputRes.resType == Texture
-                                 ? VK_IMAGE_USAGE_SAMPLED_BIT : VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
-        }
-    }
-}
 
-void RenderDAG::setOutputUsage(ResourceHandle resHandle)
+NodeAttachment::NodeAttachment(vsg::ref_ptr<AttachmentUse> in_resource)
+    :resource(in_resource), desiredInitialLayout(VK_IMAGE_LAYOUT_UNDEFINED)
 {
-    auto& outputRes = resources[resHandle];
-    vsg::ref_ptr<TextureDesc> texDesc = outputRes.desc->creationDesc().cast<TextureDesc>();
-    if (texDesc)
+    // Fill a vsg::AttachmentDescription with valid values that are probably
+    // useless.
+    attachment.flags = 0;
+    attachment.format = VK_FORMAT_UNDEFINED;
+    attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachment.finalLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+}
+    
+uint32_t RenderNode::addAttachment(const vsg::ref_ptr<AttachmentUse>& att)
+{
+    attachments.push_back(att);
+    if (auto presentation = ref_ptr_cast<PresentationResource>(att->resource); presentation.valid())
     {
-        // XXX Better way to determine depth usage?
-        if (texDesc->format() == VK_FORMAT_D32_SFLOAT)
+        // XXX Get the actual format!!!
+        attachments.back().attachment.format = VK_FORMAT_B8G8R8A8_SRGB;
+    }
+    else if (auto attachImage = ref_ptr_cast<ImageResource>(att->resource); attachImage.valid())
+    {
+        if (attachImage->source.valid())
         {
-            texDesc->usage() |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+                attachments.back().attachment.format = attachImage->source->format;
         }
         else
         {
-            texDesc->usage() |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;            
+            vsg::fatal("Attachment doesn't have image resource");
         }
     }
+    return lastIndex(attachments);
 }
 
+// XXX Set ImageView usage when (if) VSG supports it.
 namespace
 {
-    void createImageView(Resource& outputRes, vsg::Device* device, VkExtent2D& extent)
+    void setAttachmentUsage(const vsg::ref_ptr<ResourceUse>& use, VkImageUsageFlags usageFlags)
     {
-        VkExtent3D imageExtent{0, 0, 1};
-        vsg::ref_ptr<TextureDesc> texDesc = outputRes.desc->creationDesc().cast<TextureDesc>();
-        if (!texDesc)
+        if (auto attachment = ref_ptr_cast<AttachmentUse>(use); attachment.valid())
         {
-            vsg::fatal("Resource ", outputRes.desc->name(), "has no texture description");
+            auto imageResource = ref_ptr_cast<ImageResource>(attachment->resource);
+            if (!imageResource)
+            {
+                vsg::warn("resource ", name(attachment->resource), " is not an image.");
+            }
+            else
+            {
+                imageResource->source->usage |= usageFlags;
+            }
         }
-        if (texDesc->width() != 0)
-        {
-            imageExtent.width = texDesc->width();
-        }
-        else
-        {
-            imageExtent.width = texDesc->scale().x * extent.width;
-        }
-        if (texDesc->height() != 0)
-        {
-            imageExtent.height = texDesc->height();
-        }
-        else
-        {
-            imageExtent.height = texDesc->scale().y * extent.height;
-        }
-        auto image = vsg::Image::create();
-        image->imageType = VK_IMAGE_TYPE_2D;
-        image->format = texDesc->format();
-        image->extent = imageExtent;
-        image->mipLevels = 1;
-        image->arrayLayers = 1;
-        image->samples = VK_SAMPLE_COUNT_1_BIT;
-        image->tiling = VK_IMAGE_TILING_OPTIMAL;
-        image->usage = texDesc->usage();
-        image->initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        image->flags = 0;
-        image->sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        auto aspectFlags = vsg::computeAspectFlagsForFormat(image->format);
-        texDesc->imageView = createImageView(device, image, aspectFlags);
+    }
 
-        // Sampler for accessing attachment as a texture
-        if ((aspectFlags & VK_IMAGE_ASPECT_COLOR_BIT))
+    std::optional<uint32_t> maxAttachmentForType(const std::vector<vsg::ref_ptr<ResourceUse>>& resUses,
+                                                 AttachmentType attType)
+    {
+        auto itr = std::max_element(resUses.begin(), resUses.end(),
+                                    [attType](const auto& res1, const auto& res2)
+                                    {
+                                        auto attach2 = isAttachment(res2, attType);
+                                        if (!attach2)
+                                        {
+                                            return false;
+                                        }
+                                        auto attach1 = isAttachment(res1, attType);
+                                        if (!attach1)
+                                        {
+                                            return true;
+                                        }
+                                        return attach1->attachment < attach2->attachment;
+                                    });
+        if (itr == resUses.end())
         {
-            texDesc->sampler = vsg::Sampler::create();
-            texDesc->sampler->flags = 0;
-            texDesc->sampler->magFilter = VK_FILTER_LINEAR;
-            texDesc->sampler->minFilter = VK_FILTER_LINEAR;
-            texDesc->sampler->mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-            texDesc->sampler->addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            texDesc->sampler->addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            texDesc->sampler->addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-            texDesc->sampler->mipLodBias = 0.0f;
-            texDesc->sampler->maxAnisotropy = 1.0f;
-            texDesc->sampler->minLod = 0.0f;
-            texDesc->sampler->maxLod = 1.0f;
-            texDesc->sampler->borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
+            return {};
         }
+        if (auto attachment = isAttachment(*itr, attType); attachment.valid())
+        {
+            return attachment->attachment;
+        }
+        return {};
     }
 }
 
+// Allocate the subpass description arrays. Attachment references need to be stored in specific
+// elements.
+
+
+void RenderNode::allocatePassAttachments()
+{
+
+    auto maxInputAttachment = maxAttachmentForType(inputs, Input);
+    auto maxColorAttachment = maxAttachmentForType(outputs, Color);
+    auto maxResolveAttachment = maxAttachmentForType(outputs, MultisampleResolve);
+    
+
+    if (maxInputAttachment)
+    {
+        description.inputAttachments.resize(*maxInputAttachment + 1,
+                                            {VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_UNDEFINED});
+    }
+    if (maxColorAttachment)
+    {
+        description.colorAttachments.resize(*maxColorAttachment + 1,
+                                            {VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_UNDEFINED});
+    }
+    if (maxResolveAttachment)
+    {
+        if (*maxResolveAttachment > *maxColorAttachment)
+        {
+            vsg::fatal("Illegal resolve attachment reference.");
+        }
+        auto resolveSize = std::max(*maxColorAttachment, *maxResolveAttachment) + 1;
+        description.resolveAttachments.resize(resolveSize, {VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_UNDEFINED});
+    }
+}
+
+void RenderNode::prepareResources()
+{
+    allocatePassAttachments();
+    for (const auto& resUse : inputs)
+    {
+        if (auto att = isAttachment(resUse, Input); att.valid())
+        {
+            setAttachmentUsage(att, VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT);
+            auto attachIdx = addAttachment(att);
+            auto passLayout = VK_IMAGE_LAYOUT_READ_ONLY_OPTIMAL;
+            description.inputAttachments[att->attachment].attachment = attachIdx;
+            description.inputAttachments[att->attachment].layout = passLayout;
+            attachments[attachIdx].desiredInitialLayout = passLayout;
+            attachments[attachIdx].attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        }
+        else
+        {
+            // XXX Input texture: VK_IMAGE_USAGE_SAMPLED_BIT
+        }
+    }
+    for (const auto& resUse : outputs)
+    {
+        vsg::ref_ptr<AttachmentUse> att;
+        if ((att = isAttachment(resUse, Color)))
+        {
+            setAttachmentUsage(att, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+            description.colorAttachments[att->attachment].attachment = addAttachment(att);
+            description.colorAttachments[att->attachment].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
+        else if ((att = isAttachment(resUse, Depth)))
+        {
+            setAttachmentUsage(att, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+            description.depthStencilAttachments
+                .emplace_back(addAttachment(att), VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        }
+        else if ((att = isAttachment(resUse, MultisampleResolve)))
+        {
+            // Order must correspond to color attachments
+            setAttachmentUsage(att, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+            description.resolveAttachments[att->attachment].attachment = addAttachment(att);
+            description.resolveAttachments[att->attachment].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        }
+    }
+    // XXX An attachment could have more than one use, in a pass with aliasing; how to deal with
+    // that?
+    // Set the layout and store op in each resource's producer node
+    for (auto& nodeAttachment : attachments)
+    {
+        auto resUse = nodeAttachment.resource;
+        vsg::ref_ptr<Node> ref_producer = resUse->resource->producer;
+        if (ref_producer.get() == this)
+        {
+            ref_producer = resUse->resource->ancestor;
+        }
+        if (ref_producer)
+        {
+            nodeAttachment.attachment.initialLayout
+                = ref_producer->compareSetFinalLayout(resUse->resource, nodeAttachment.desiredInitialLayout);
+            // set producer store op
+        }
+    }
+    // subpass dependencies
+}
+
+VkImageLayout RenderNode::compareSetFinalLayout(const vsg::ref_ptr<Resource> &resource, VkImageLayout layout)
+{
+    auto itr = std::find(attachments.begin(), attachments.end(),
+                         [&resource](const NodeAttachment& attachment)
+                         {
+                             return attachment.resource == resource;
+                         });
+    if (itr == attachments.end())
+    {
+        return VK_IMAGE_LAYOUT_UNDEFINED;
+    }
+    if (itr->attachment.finalLayout != VK_IMAGE_LAYOUT_UNDEFINED)
+    {
+        return itr->attachment.finalLayout;
+    }
+    itr->attachment.finalLayout = layout;
+    return layout;
+}
+
+#if 0
 void RenderDAG::allocateTextures(vsg::Device* device)
 {
 
@@ -330,54 +409,17 @@ void RenderDAG::allocateTextures(vsg::Device* device)
         }
     }
 }
+#endif
 
 void RenderDAG::makeRenderPasses()
 {
-    for (auto nodeHandle : sortedNodes)
+    for (auto node : sortedNodes)
     {
-        auto& node = nodes[nodeHandle];
-        std::vector<ResourceHandle> attachments;
-        vsg::RenderPass::Attachments vsgAttachments;
-        for (auto outputResHandle : node.outputs)
-        {
-            auto& outputRes = resources[outputResHandle];
-            if (outputRes.resType == Attachment)
-            {
-                // Other kinds of outputs?
-                attachments.push_back(outputRes.outputHandle);
-                auto& attach = vsgAttachments.emplace_back();
-                // attach.format = outputRes.desc->creationDesc()->
-
-                
-            }
-        }
-        for (auto inputResHandle : node.inputs)
-        {
-            auto& inputRes = resources[inputResHandle];
-            if (inputRes.resType == Attachment)
-            {
-                attachments.push_back(inputRes.outputHandle);
-            }
-        }
-
+        node->prepareResources();
     }
+
 }
 
-// Many fields can (should) be deferred until the render graph is compiled.
-vsg::ref_ptr<vsg::Image> RenderDAG::makeImage(VkFormat format, VkSampleCountFlags sampleCount)
-{
-    auto image = vsg::Image::create();
-    image->imageType = VK_IMAGE_TYPE_2D;
-    image->format = format;
-    image->mipLevels = 1;
-    image->arrayLayers = 1;
-    image->samples = sampleCount;
-    image->tiling = VK_IMAGE_TILING_OPTIMAL;
-//    image->usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
-    image->initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    image->flags = 0;
-    image->sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-}
 
 void RenderDAG::build(vsg::Device* device)
 {
