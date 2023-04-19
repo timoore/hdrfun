@@ -104,17 +104,14 @@ vsg::ref_ptr<RenderDAG>
 makeHDRDag()
 {
     auto dag = RenderDAG::create();
-    auto HDRPassNode = RenderNode::create();
-    setName(HDRPassNode, "HDRPass");
+    auto HDRPassNode = RenderNode::create("HDRPass");
     auto HDRImage = RenderDAG::makeImage(VK_FORMAT_R16G16B16A16_UNORM);
     auto HDRIv = vsg::ImageView::create(HDRImage, VK_IMAGE_ASPECT_COLOR_BIT); // XXX delay aspect?
-    auto HDRColor = ImageResource::create(HDRImage, HDRIv);
-    setName(HDRColor, "HDRColor");
+    auto HDRColor = ImageResource::create("HDRColor", HDRImage, HDRIv);
     dag->addResource(HDRColor);
     auto depthImage = RenderDAG::makeImage(VK_FORMAT_D32_SFLOAT);
     auto depthIv = vsg::ImageView::create(depthImage, VK_IMAGE_ASPECT_DEPTH_BIT);
-    auto depth = ImageResource::create(depthImage, depthIv);
-    setName(depth, "depth");
+    auto depth = ImageResource::create("depth", depthImage, depthIv);
     dag->addResource(depth);
     HDRPassNode->addOutput(AttachmentUse::create(HDRColor, Color));
     HDRPassNode->addOutput(AttachmentUse::create(depth, Depth));
